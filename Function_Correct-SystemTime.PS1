@@ -31,6 +31,9 @@ Function Correct-SystemTime{
 
     #Clear Variables encase function has been used before in session (never know!)   
     $Computer = $AdCheck = $PathTest = $TimeAndDate = $RemoteTimeAndDate = $null
+
+    # Allowed drift (in seconds) between local and remote clocks before treating them as different
+    $ToleranceSeconds = 2
     
    # Get Computer info from AD
    try{
@@ -65,7 +68,7 @@ Function Correct-SystemTime{
         $TimeAndDate = Get-Date
         
         #if time is out (allow a small tolerance for command/query latency)
-        if([Math]::Abs(($RemoteTimeAndDate - $TimeAndDate).TotalSeconds) -ge 2){
+        if([Math]::Abs(($RemoteTimeAndDate - $TimeAndDate).TotalSeconds) -ge $ToleranceSeconds){
             
             Write-Host ""
             Write-Host -ForegroundColor RED "$($ComputerName) time is out"
@@ -98,7 +101,7 @@ Function Correct-SystemTime{
                 }
 
                 #confirm time and date was set correctly, allowing a small tolerance for latency
-                if([Math]::Abs(($RemoteTimeAndDate - $TimeAndDate).TotalSeconds) -lt 2){
+                if([Math]::Abs(($RemoteTimeAndDate - $TimeAndDate).TotalSeconds) -lt $ToleranceSeconds){
             
                     #output if successful
                     Write-Host ""
