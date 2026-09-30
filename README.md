@@ -69,6 +69,9 @@ Correct-SystemTime -ComputerName Computer01 -Domain CONTOSO
   machine to match the local time, never the other way around.
 - It is **interactive** — when a time difference is detected, it requires a `Y` confirmation at
   the prompt before making any change. It is not suitable for unattended/scheduled use as-is.
+- `Set-Date` sets the remote machine's *local* time to the sending machine's *local* time value.
+  If the local and remote machines are in **different time zones**, run this only when you intend
+  the remote machine to adopt the local machine's time zone's clock time, or adjust accordingly.
 - Time comparisons use a small (2 second) tolerance to account for command and clock-query
   latency; this is not a high-precision time sync tool (consider `w32tm`/NTP for that).
 - Requires network connectivity, AD lookup rights, and PowerShell remoting to the target; any of
