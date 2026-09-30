@@ -43,12 +43,8 @@ Function Correct-SystemTime{
 
     # Check machine is online 
     if($True -eq $AdCheck){   
-        try{
-            $PathTest = Test-Connection -Computername $Computer.DNSHostname -BufferSize 16 -Count 1 -Quiet -ErrorAction Stop
-        }Catch{
-            Write-Host -ForegroundColor Red "Unable to test connection to $($ComputerName): $($_.Exception.Message)"
-            $PathTest = $false
-        }
+        # -Quiet returns $false (rather than throwing) when the machine doesn't respond
+        $PathTest = Test-Connection -Computername $Computer.DNSHostname -BufferSize 16 -Count 1 -Quiet
     } #End of If ADcheck is True
 
     #if Machine is online
