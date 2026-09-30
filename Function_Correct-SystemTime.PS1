@@ -1,108 +1,127 @@
-Function Correct-SystemTime{
+function Correct-SystemTime {
     <#
     .SYNOPSIS
-    Function to correct wrong time and date on remote machines
-    by Steven Wight
+    Corrects the time on a remote computer after interactive confirmation.
+
     .DESCRIPTION
-    Correct-SystemTime -ComputerName <Hostname> -Domain <domain> (default = SANUK)
+    Finds a computer in Active Directory, checks connectivity, compares its
+    time with the initiating computer, and offers to set the remote time.
+    The initiating computer's clock is treated as correct.
+
+    .PARAMETER ComputerName
+    The computer name to find in Active Directory.
+
+    .PARAMETER Domain
+    The Active Directory domain or directory server to query. Defaults to SANUK.
+
     .EXAMPLE
-    Correct-SystemTime Computer01
-    .Notes
-    This assumes the correct time and date on the machine it's being run from # ADD IN CHECK FOR SERVICE W32TIME - START/RESTART !?!
+    Correct-SystemTime -ComputerName 'Computer01' -Domain 'contoso.com'
+
+    .NOTES
+    Requires the ActiveDirectory module and permission to query Active
+    Directory. PowerShell remoting must be enabled on the remote computer,
+    and the caller must have permission to change its system time.
+
+    Originally written by Steven Wight.
     #>
     [CmdletBinding()]
-    Param(
-        [Parameter()] [String] [ValidateNotNullOrEmpty()] $ComputerName,  
-        [Parameter()] [String] [ValidateNotNullOrEmpty()] $Domain = "SANUK" 
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [ValidateNotNullOrEmpty()]
+        [string] $ComputerName,
+
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string] $Domain = 'SANUK'
     )
 
-    #Clear Variables encase function has been used before in session (never know!)   
-    $Computer = $AdCheck = $PathTest = $TimeAndDate = $RemoteTimeAndDate = $null
-    
-   # Get Computer info from AD
-   try{
-        $Computer = (Get-ADComputer $ComputerName -properties DNSHostname,description,OperatingSystem -server $Domain -ErrorAction stop)
-        $AdCheck = $true
-    }Catch{
-        Write-Host -ForegroundColor Red "Machine $($ComputerName) not found in AD"
-        $Computer = $_.Exception.Message
-        $AdCheck = $false
+    $timeToleranceSeconds = 2
+
+    try {
+        $computer = Get-ADComputer -Identity $ComputerName `
+            -Properties DNSHostname, Description, OperatingSystem `
+            -Server $Domain -ErrorAction Stop
+    }
+    catch {
+        Write-Error "Unable to find '$ComputerName' in Active Directory using '$Domain'. Verify the computer name, domain, ActiveDirectory module, and directory access. Details: $($_.Exception.Message)"
+        return
     }
 
-    # Check machine is online 
-    if($True -eq $AdCheck){   
-        $PathTest = Test-Connection -Computername $Computer.DNSHostname -BufferSize 16 -Count 1 -Quiet
-    } #End of If ADcheck is True
+    if ([string]::IsNullOrWhiteSpace($computer.DNSHostname)) {
+        Write-Error "Active Directory did not return a DNS host name for '$ComputerName'. Verify the computer object's DNSHostname attribute."
+        return
+    }
 
-    #if Machine is online
-    if($True -eq $PathTest) {
-    
-        #Output machine is online to the console
-        Write-host -ForegroundColor Green "$($ComputerName) is online"
-         
-        #Get remote machines Time and date
-        $RemoteTimeAndDate = Invoke-Command -ComputerName $Computer.DNSHostname -ScriptBlock { return Get-Date -Format "dddd MM/dd/yyyy HH:mm" }
-        
-        #get local machines date and time
-        $TimeAndDate = Get-date -Format "dddd MM/dd/yyyy HH:mm"
-        
-        #if time is out
-        if($RemoteTimeAndDate -ne $TimeAndDate){
-            
-            Write-Host ""
-            Write-Host -ForegroundColor RED "$($ComputerName) time is out"
-            Write-Host -ForegroundColor RED "Remote Time - $($RemoteTimeAndDate)"
-            Write-Host -ForegroundColor RED "Remote Time - $($TimeAndDate)"
-            Write-Host ""
+    try {
+        $isOnline = Test-Connection -ComputerName $computer.DNSHostname `
+            -BufferSize 16 -Count 1 -Quiet -ErrorAction Stop
+    }
+    catch {
+        Write-Error "Unable to check connectivity to '$($computer.DNSHostname)'. Verify DNS, network access, and that ICMP echo requests are allowed. Details: $($_.Exception.Message)"
+        return
+    }
 
-            $Continue = Read-Host -Prompt 'Do you wish to correct? -  Press Y to continue'
+    if (-not $isOnline) {
+        Write-Error "'$ComputerName' did not respond to the connectivity check. Verify that it is online and reachable, and that ICMP echo requests are allowed."
+        return
+    }
 
-            if ("Y" -eq $Continue.ToUpper()) {
-                
-                Write-Host ""
-                Write-Warning -Message "Correcting time on $($ComputerName)"
-                Write-Host ""
+    Write-Host -ForegroundColor Green "$ComputerName is online"
 
-                #get local machines date and time
-                $TimeAndDate = Get-date 
+    try {
+        $remoteTimeAndDate = Invoke-Command -ComputerName $computer.DNSHostname `
+            -ScriptBlock { Get-Date } -ErrorAction Stop
+    }
+    catch {
+        Write-Error "Unable to read the time from '$($computer.DNSHostname)'. Verify that PowerShell remoting/WinRM is enabled and that you have permission to connect. Details: $($_.Exception.Message)"
+        return
+    }
 
-                #Correct time on remote machine
-                $RemoteTimeAndDate = Invoke-Command -ComputerName $Computer.DNSHostname -ScriptBlock {  Set-Date -Date $using:TimeAndDate
-                                                                                                        return Get-Date -Format "dddd MM/dd/yyyy HH:mm" }
+    $timeAndDate = Get-Date
+    if ([Math]::Abs(($remoteTimeAndDate - $timeAndDate).TotalSeconds) -gt $timeToleranceSeconds) {
+        Write-Host ''
+        Write-Host -ForegroundColor Red "$ComputerName time is out"
+        Write-Host -ForegroundColor Red "Remote Time - $(Get-Date -Date $remoteTimeAndDate -Format 'dddd MM/dd/yyyy HH:mm:ss')"
+        Write-Host -ForegroundColor Red "Local Time  - $(Get-Date -Date $timeAndDate -Format 'dddd MM/dd/yyyy HH:mm:ss')"
+        Write-Host ''
 
-                #confirm time and date was set correctly
-                if($RemoteTimeAndDate -eq $TimeAndDate){
-            
-                    #output if successful
-                    Write-Host ""
-                    Write-Host -ForegroundColor Green "$($ComputerName) time was successfully corrected"
-                    Write-Host ""
+        $continue = Read-Host -Prompt 'Do you wish to correct? Press Y to continue'
+        if ($continue -ine 'Y') {
+            Write-Host "No changes made to $ComputerName."
+            return
+        }
 
-                }else{
+        Write-Warning "Correcting time on $ComputerName"
+        $timeAndDate = Get-Date
 
-                    #output if unsuccessful and what the difference is
-                    Write-Host ""
-                    Write-Host -ForegroundColor RED "$($ComputerName) issue correcting time"
-                    Write-Host -ForegroundColor RED "Remote Time - $($RemoteTimeAndDate)"
-                    Write-Host -ForegroundColor RED "Remote Time - $($TimeAndDate)"
-                    Write-Host ""
+        try {
+            $remoteTimeAndDate = Invoke-Command -ComputerName $computer.DNSHostname `
+                -ScriptBlock {
+                    Set-Date -Date $using:timeAndDate -ErrorAction Stop
+                    Get-Date
+                } -ErrorAction Stop
+        }
+        catch {
+            Write-Error "Unable to set the time on '$($computer.DNSHostname)'. Verify PowerShell remoting access and that your account is permitted to change the remote system time. Details: $($_.Exception.Message)"
+            return
+        }
 
-                }
-            }
-             
-        }else{
-            
-            #output if time is okay
-            Write-Host ""
-            Write-Host -ForegroundColor Green "$($ComputerName) time is correct"
-            Write-Host ""  
-        
-        }                                                                                               
-
-    }else{#If machine wasn't online 
-        
-        #Output machine is online to the console
-        Write-host -ForegroundColor Red "$($ComputerName) is offline"
-
-    }# End of If
-}# end of Function
+        if ([Math]::Abs(($remoteTimeAndDate - $timeAndDate).TotalSeconds) -le $timeToleranceSeconds) {
+            Write-Host ''
+            Write-Host -ForegroundColor Green "$ComputerName time was successfully corrected"
+            Write-Host ''
+        }
+        else {
+            Write-Host ''
+            Write-Host -ForegroundColor Red "$ComputerName issue correcting time"
+            Write-Host -ForegroundColor Red "Remote Time - $(Get-Date -Date $remoteTimeAndDate -Format 'dddd MM/dd/yyyy HH:mm:ss')"
+            Write-Host -ForegroundColor Red "Local Time  - $(Get-Date -Date $timeAndDate -Format 'dddd MM/dd/yyyy HH:mm:ss')"
+            Write-Host ''
+        }
+    }
+    else {
+        Write-Host ''
+        Write-Host -ForegroundColor Green "$ComputerName time is correct"
+        Write-Host ''
+    }
+}
